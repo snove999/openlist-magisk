@@ -66,7 +66,7 @@ OpenList All-in-One 模块将 [OpenList](https://github.com/OpenListTeam/OpenLis
 **配置文件位置**：`<数据目录>/config/services.conf`
 
 ```bash
-# 设置为 true 启用，false 禁用
+设置为 true 启用，false 禁用
 openlist=true # OpenList 文件服务器
 aria2=false # Aria2 下载器
 qbittorrent=false # Qbittorrent BT客户端
