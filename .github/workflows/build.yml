@@ -491,9 +491,9 @@ jobs:
           4. 重启设备
           
           ### 🔗 默认端口
-          - OpenList: `5244`
-          - Aria2 RPC: `6800` (密钥: `openlist`)
-          - Qbittorrent: `8080` (admin/adminadmin)
+          - OpenList: \`5244\`
+          - Aria2 RPC: \`6800\` (密钥: \`openlist\`)
+          - Qbittorrent: \`8080\` (admin/adminadmin)
           
           ---
           > 自动构建于 ${BUILD_TIME} UTC
