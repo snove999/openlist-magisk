@@ -2,8 +2,8 @@ name: 构建 OpenList Magisk 模块 (All-in-One)
 
 on:
   schedule:
-    - cron: '0 2 * * 0'  # 每周天凌晨2点运行一次
-  workflow_dispatch:  # 支持手动触发
+    - cron: '0 18 * * 6'  # 北京时间周日凌晨2点 (UTC周六18点)
+  workflow_dispatch:
     inputs:
       force_build:
         description: '强制构建（忽略版本检查）'
@@ -59,7 +59,6 @@ jobs:
             exit 1
           fi
           
-          # 生成版本号：去掉v和.，转为整数
           VERSION_CODE=$(echo "$VERSION" | tr -d 'v' | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
           
           ARM_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("openlist-android-arm.tar.gz")) | .browser_download_url')
@@ -219,11 +218,9 @@ jobs:
           SHOULD_BUILD="false"
           BUILD_REASON=""
           
-          # 手动触发强制构建
           if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
             SHOULD_BUILD="true"
             BUILD_REASON="手动强制构建"
-          # 检查各组件版本
           elif [ "${{ env.OPENLIST_VERSION }}" != "${{ env.CURRENT_OPENLIST }}" ]; then
             SHOULD_BUILD="true"
             BUILD_REASON="OpenList 更新: ${{ env.CURRENT_OPENLIST }} → ${{ env.OPENLIST_VERSION }}"
@@ -309,12 +306,10 @@ jobs:
         run: |
           echo "::group::组装模块"
           
-          # 创建目录结构
           mkdir -p OpenList-Magisk/bin
           mkdir -p OpenList-Magisk/web/ariang
           mkdir -p OpenList-Magisk/web/vuetorrent
           
-          # 解压 OpenList
           echo "处理 OpenList ARM..."
           tar -xzf downloads/openlist-arm.tar.gz -C downloads/
           mv downloads/openlist OpenList-Magisk/openlist-arm
@@ -323,48 +318,38 @@ jobs:
           tar -xzf downloads/openlist-arm64.tar.gz -C downloads/
           mv downloads/openlist OpenList-Magisk/openlist-arm64
           
-          # 解压 Aria2
           echo "处理 Aria2..."
           tar -xzf downloads/aria2.tar.gz -C downloads/
           find downloads -name "aria2c" -type f -exec mv {} OpenList-Magisk/bin/aria2c \;
           
-          # Qbittorrent（直接是二进制）
           echo "处理 Qbittorrent..."
           mv downloads/qbittorrent-nox OpenList-Magisk/bin/qbittorrent-nox
           
-          # 解压 Frpc
           echo "处理 Frpc..."
           tar -xzf downloads/frp.tar.gz -C downloads/
           find downloads -name "frpc" -type f -exec mv {} OpenList-Magisk/bin/frpc \;
           
-          # 解压 Rclone
           echo "处理 Rclone..."
           unzip -o downloads/rclone.zip -d downloads/rclone_tmp
           find downloads/rclone_tmp -name "rclone" -type f -exec mv {} OpenList-Magisk/bin/rclone \;
           
-          # 解压 AriaNg
           echo "处理 AriaNg..."
           unzip -o downloads/ariang.zip -d OpenList-Magisk/web/ariang
           
-          # 解压 VueTorrent
           echo "处理 VueTorrent..."
           unzip -o downloads/vuetorrent.zip -d downloads/vuetorrent_tmp
-          # VueTorrent 可能有嵌套目录
           if [ -d "downloads/vuetorrent_tmp/vuetorrent" ]; then
             mv downloads/vuetorrent_tmp/vuetorrent/* OpenList-Magisk/web/vuetorrent/
           else
             mv downloads/vuetorrent_tmp/* OpenList-Magisk/web/vuetorrent/
           fi
           
-          # 设置权限
           echo "设置执行权限..."
           chmod 755 OpenList-Magisk/openlist-*
           chmod 755 OpenList-Magisk/bin/*
           
-          # 清理临时文件
           rm -rf downloads
           
-          # 显示结果
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "模块文件结构:"
           find OpenList-Magisk -type f | head -50
@@ -381,7 +366,6 @@ jobs:
           echo "::group::更新 module.prop"
           
           if [ -f OpenList-Magisk/module.prop ]; then
-            # 更新版本信息
             sed -i "s/^version=.*/version=${{ env.OPENLIST_VERSION }} (All-in-One)/" OpenList-Magisk/module.prop
             sed -i "s/^versionCode=.*/versionCode=${{ env.OPENLIST_VERSION_CODE }}/" OpenList-Magisk/module.prop
             
@@ -398,7 +382,6 @@ jobs:
         run: |
           echo "::group::更新 update.json"
           
-          # 生成更新日志摘要
           CHANGELOG_SUMMARY="OpenList ${{ env.OPENLIST_VERSION }}"
           [ "${{ env.ARIA2_VERSION }}" != "${{ env.CURRENT_ARIA2 }}" ] && CHANGELOG_SUMMARY="$CHANGELOG_SUMMARY | Aria2 ${{ env.ARIA2_VERSION }}"
           [ "${{ env.QBIT_VERSION }}" != "${{ env.CURRENT_QBIT }}" ] && CHANGELOG_SUMMARY="$CHANGELOG_SUMMARY | QB ${{ env.QBIT_VERSION }}"
@@ -432,7 +415,6 @@ jobs:
           
           cd OpenList-Magisk
           
-          # 创建 zip 包
           zip -r ../openlist-magisk-${{ env.OPENLIST_VERSION }}.zip . \
             -x "*.git*" \
             -x "*.md" \
@@ -440,7 +422,6 @@ jobs:
           
           cd ..
           
-          # 显示包信息
           echo "打包完成:"
           ls -lh openlist-magisk-${{ env.OPENLIST_VERSION }}.zip
           echo "::endgroup::"
@@ -541,6 +522,38 @@ jobs:
             --draft=false \
             --prerelease=false \
             "openlist-magisk-${{ env.OPENLIST_VERSION }}.zip"
+
+      # ================================================================
+      # 清理旧版本 Release（新增）
+      # ================================================================
+      
+      - name: 清理旧版本 Release
+        if: env.SHOULD_BUILD == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::清理旧版本 Release"
+          
+          # 获取所有 release 的 tag（按时间排序，最新在前）
+          RELEASES=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          
+          COUNT=0
+          KEEP=1  # 只保留最新的 1 个版本
+          
+          for TAG in $RELEASES; do
+            COUNT=$((COUNT + 1))
+            
+            if [ $COUNT -gt $KEEP ]; then
+              echo "🗑️ 删除旧版本: $TAG"
+              gh release delete "$TAG" --yes --cleanup-tag || true
+            else
+              echo "✅ 保留最新版本: $TAG"
+            fi
+          done
+          
+          echo ""
+          echo "清理完成，保留了 $KEEP 个最新版本"
+          echo "::endgroup::"
 
       # ================================================================
       # 清理阶段
