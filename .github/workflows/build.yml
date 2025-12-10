@@ -1,0 +1,576 @@
+name: 构建 OpenList Magisk 模块 (All-in-One)
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # 每4小时运行一次
+  workflow_dispatch:  # 支持手动触发
+    inputs:
+      force_build:
+        description: '强制构建（忽略版本检查）'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - 'OpenList-Magisk/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  MODULE_ID: "openlist"
+  MODULE_NAME: "OpenList All-in-One"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl zip gh jq
+
+      # ================================================================
+      # 第一阶段：获取所有组件的最新版本
+      # ================================================================
+      
+      - name: 获取 OpenList 最新版本
+        id: openlist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 OpenList 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/OpenListTeam/OpenList/releases/latest")
+          
+          VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
+          if [ -z "$VERSION" ]; then
+            echo "::error::无法获取 OpenList 版本"
+            exit 1
+          fi
+          
+          # 生成版本号：去掉v和.，转为整数
+          VERSION_CODE=$(echo "$VERSION" | tr -d 'v' | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+          
+          ARM_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("openlist-android-arm.tar.gz")) | .browser_download_url')
+          ARM64_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("openlist-android-arm64.tar.gz")) | .browser_download_url')
+          
+          echo "OpenList 版本: $VERSION (Code: $VERSION_CODE)"
+          echo "ARM URL: $ARM_URL"
+          echo "ARM64 URL: $ARM64_URL"
+          
+          echo "OPENLIST_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "OPENLIST_VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "OPENLIST_ARM_URL=$ARM_URL" >> $GITHUB_ENV
+          echo "OPENLIST_ARM64_URL=$ARM64_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 Aria2 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 Aria2 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/q3aql/aria2-static-builds/releases/latest")
+          
+          ARIA2_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          ARIA2_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("android-arm64")) | .browser_download_url')
+          
+          echo "Aria2 版本: $ARIA2_VERSION"
+          echo "ARIA2_VERSION=$ARIA2_VERSION" >> $GITHUB_ENV
+          echo "ARIA2_URL=$ARIA2_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 Qbittorrent 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 Qbittorrent 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/userdocs/qbittorrent-nox-static/releases/latest")
+          
+          QBIT_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          QBIT_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "aarch64-qbittorrent-nox") | .browser_download_url')
+          
+          echo "Qbittorrent 版本: $QBIT_VERSION"
+          echo "QBIT_VERSION=$QBIT_VERSION" >> $GITHUB_ENV
+          echo "QBIT_URL=$QBIT_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 Frpc 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 Frpc 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/fatedier/frp/releases/latest")
+          
+          FRPC_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          FRPC_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url')
+          
+          echo "Frpc 版本: $FRPC_VERSION"
+          echo "FRPC_VERSION=$FRPC_VERSION" >> $GITHUB_ENV
+          echo "FRPC_URL=$FRPC_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 Rclone 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 Rclone 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/rclone/rclone/releases/latest")
+          
+          RCLONE_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          RCLONE_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("rclone-v.*-linux-arm64.zip")) | .browser_download_url')
+          
+          echo "Rclone 版本: $RCLONE_VERSION"
+          echo "RCLONE_VERSION=$RCLONE_VERSION" >> $GITHUB_ENV
+          echo "RCLONE_URL=$RCLONE_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 AriaNg 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 AriaNg 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/mayswind/AriaNg/releases/latest")
+          
+          ARIANG_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          ARIANG_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("AllInOne.zip")) | .browser_download_url')
+          
+          echo "AriaNg 版本: $ARIANG_VERSION"
+          echo "ARIANG_VERSION=$ARIANG_VERSION" >> $GITHUB_ENV
+          echo "ARIANG_URL=$ARIANG_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      - name: 获取 VueTorrent 最新版本
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::group::获取 VueTorrent 版本信息"
+          RELEASE_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/VueTorrent/VueTorrent/releases/latest")
+          
+          VUETORRENT_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+          VUETORRENT_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("vuetorrent.zip")) | .browser_download_url')
+          
+          echo "VueTorrent 版本: $VUETORRENT_VERSION"
+          echo "VUETORRENT_VERSION=$VUETORRENT_VERSION" >> $GITHUB_ENV
+          echo "VUETORRENT_URL=$VUETORRENT_URL" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      # ================================================================
+      # 第二阶段：版本检查与构建决策
+      # ================================================================
+      
+      - name: 读取当前已发布版本
+        id: check_version
+        run: |
+          echo "::group::读取 update.json 中的版本信息"
+          if [ -f update.json ]; then
+            echo "CURRENT_OPENLIST=$(jq -r '.version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_ARIA2=$(jq -r '.aria2_version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_QBIT=$(jq -r '.qbit_version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_FRPC=$(jq -r '.frpc_version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_RCLONE=$(jq -r '.rclone_version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_ARIANG=$(jq -r '.ariang_version // "none"' update.json)" >> $GITHUB_ENV
+            echo "CURRENT_VUETORRENT=$(jq -r '.vuetorrent_version // "none"' update.json)" >> $GITHUB_ENV
+            cat update.json
+          else
+            echo "update.json 不存在，将进行首次构建"
+            echo "CURRENT_OPENLIST=none" >> $GITHUB_ENV
+            echo "CURRENT_ARIA2=none" >> $GITHUB_ENV
+            echo "CURRENT_QBIT=none" >> $GITHUB_ENV
+            echo "CURRENT_FRPC=none" >> $GITHUB_ENV
+            echo "CURRENT_RCLONE=none" >> $GITHUB_ENV
+            echo "CURRENT_ARIANG=none" >> $GITHUB_ENV
+            echo "CURRENT_VUETORRENT=none" >> $GITHUB_ENV
+          fi
+          echo "::endgroup::"
+
+      - name: 判断是否需要构建
+        id: should_build
+        run: |
+          echo "::group::版本对比"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "组件           当前版本          最新版本"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "OpenList       ${{ env.CURRENT_OPENLIST }}    →    ${{ env.OPENLIST_VERSION }}"
+          echo "Aria2          ${{ env.CURRENT_ARIA2 }}    →    ${{ env.ARIA2_VERSION }}"
+          echo "Qbittorrent    ${{ env.CURRENT_QBIT }}    →    ${{ env.QBIT_VERSION }}"
+          echo "Frpc           ${{ env.CURRENT_FRPC }}    →    ${{ env.FRPC_VERSION }}"
+          echo "Rclone         ${{ env.CURRENT_RCLONE }}    →    ${{ env.RCLONE_VERSION }}"
+          echo "AriaNg         ${{ env.CURRENT_ARIANG }}    →    ${{ env.ARIANG_VERSION }}"
+          echo "VueTorrent     ${{ env.CURRENT_VUETORRENT }}    →    ${{ env.VUETORRENT_VERSION }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          SHOULD_BUILD="false"
+          BUILD_REASON=""
+          
+          # 手动触发强制构建
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="手动强制构建"
+          # 检查各组件版本
+          elif [ "${{ env.OPENLIST_VERSION }}" != "${{ env.CURRENT_OPENLIST }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="OpenList 更新: ${{ env.CURRENT_OPENLIST }} → ${{ env.OPENLIST_VERSION }}"
+          elif [ "${{ env.ARIA2_VERSION }}" != "${{ env.CURRENT_ARIA2 }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="Aria2 更新: ${{ env.CURRENT_ARIA2 }} → ${{ env.ARIA2_VERSION }}"
+          elif [ "${{ env.QBIT_VERSION }}" != "${{ env.CURRENT_QBIT }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="Qbittorrent 更新: ${{ env.CURRENT_QBIT }} → ${{ env.QBIT_VERSION }}"
+          elif [ "${{ env.FRPC_VERSION }}" != "${{ env.CURRENT_FRPC }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="Frpc 更新: ${{ env.CURRENT_FRPC }} → ${{ env.FRPC_VERSION }}"
+          elif [ "${{ env.RCLONE_VERSION }}" != "${{ env.CURRENT_RCLONE }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="Rclone 更新: ${{ env.CURRENT_RCLONE }} → ${{ env.RCLONE_VERSION }}"
+          elif [ "${{ env.ARIANG_VERSION }}" != "${{ env.CURRENT_ARIANG }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="AriaNg 更新: ${{ env.CURRENT_ARIANG }} → ${{ env.ARIANG_VERSION }}"
+          elif [ "${{ env.VUETORRENT_VERSION }}" != "${{ env.CURRENT_VUETORRENT }}" ]; then
+            SHOULD_BUILD="true"
+            BUILD_REASON="VueTorrent 更新: ${{ env.CURRENT_VUETORRENT }} → ${{ env.VUETORRENT_VERSION }}"
+          fi
+          
+          echo ""
+          if [ "$SHOULD_BUILD" = "true" ]; then
+            echo "✅ 需要构建: $BUILD_REASON"
+          else
+            echo "⏭️ 无需构建: 所有组件均为最新版本"
+          fi
+          
+          echo "SHOULD_BUILD=$SHOULD_BUILD" >> $GITHUB_ENV
+          echo "BUILD_REASON=$BUILD_REASON" >> $GITHUB_ENV
+          echo "::endgroup::"
+
+      # ================================================================
+      # 第三阶段：下载与组装
+      # ================================================================
+      
+      - name: 下载 OpenList
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::下载 OpenList"
+          mkdir -p downloads
+          
+          echo "下载 ARM 版本..."
+          curl -L -o downloads/openlist-arm.tar.gz "${{ env.OPENLIST_ARM_URL }}"
+          
+          echo "下载 ARM64 版本..."
+          curl -L -o downloads/openlist-arm64.tar.gz "${{ env.OPENLIST_ARM64_URL }}"
+          
+          ls -la downloads/
+          echo "::endgroup::"
+
+      - name: 下载附加组件
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::下载附加组件"
+          mkdir -p downloads
+          
+          echo "下载 Aria2..."
+          curl -L -o downloads/aria2.tar.gz "${{ env.ARIA2_URL }}"
+          
+          echo "下载 Qbittorrent..."
+          curl -L -o downloads/qbittorrent-nox "${{ env.QBIT_URL }}"
+          
+          echo "下载 Frpc..."
+          curl -L -o downloads/frp.tar.gz "${{ env.FRPC_URL }}"
+          
+          echo "下载 Rclone..."
+          curl -L -o downloads/rclone.zip "${{ env.RCLONE_URL }}"
+          
+          echo "下载 AriaNg..."
+          curl -L -o downloads/ariang.zip "${{ env.ARIANG_URL }}"
+          
+          echo "下载 VueTorrent..."
+          curl -L -o downloads/vuetorrent.zip "${{ env.VUETORRENT_URL }}"
+          
+          ls -la downloads/
+          echo "::endgroup::"
+
+      - name: 组装模块文件
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::组装模块"
+          
+          # 创建目录结构
+          mkdir -p OpenList-Magisk/bin
+          mkdir -p OpenList-Magisk/web/ariang
+          mkdir -p OpenList-Magisk/web/vuetorrent
+          
+          # 解压 OpenList
+          echo "处理 OpenList ARM..."
+          tar -xzf downloads/openlist-arm.tar.gz -C downloads/
+          mv downloads/openlist OpenList-Magisk/openlist-arm
+          
+          echo "处理 OpenList ARM64..."
+          tar -xzf downloads/openlist-arm64.tar.gz -C downloads/
+          mv downloads/openlist OpenList-Magisk/openlist-arm64
+          
+          # 解压 Aria2
+          echo "处理 Aria2..."
+          tar -xzf downloads/aria2.tar.gz -C downloads/
+          find downloads -name "aria2c" -type f -exec mv {} OpenList-Magisk/bin/aria2c \;
+          
+          # Qbittorrent（直接是二进制）
+          echo "处理 Qbittorrent..."
+          mv downloads/qbittorrent-nox OpenList-Magisk/bin/qbittorrent-nox
+          
+          # 解压 Frpc
+          echo "处理 Frpc..."
+          tar -xzf downloads/frp.tar.gz -C downloads/
+          find downloads -name "frpc" -type f -exec mv {} OpenList-Magisk/bin/frpc \;
+          
+          # 解压 Rclone
+          echo "处理 Rclone..."
+          unzip -o downloads/rclone.zip -d downloads/rclone_tmp
+          find downloads/rclone_tmp -name "rclone" -type f -exec mv {} OpenList-Magisk/bin/rclone \;
+          
+          # 解压 AriaNg
+          echo "处理 AriaNg..."
+          unzip -o downloads/ariang.zip -d OpenList-Magisk/web/ariang
+          
+          # 解压 VueTorrent
+          echo "处理 VueTorrent..."
+          unzip -o downloads/vuetorrent.zip -d downloads/vuetorrent_tmp
+          # VueTorrent 可能有嵌套目录
+          if [ -d "downloads/vuetorrent_tmp/vuetorrent" ]; then
+            mv downloads/vuetorrent_tmp/vuetorrent/* OpenList-Magisk/web/vuetorrent/
+          else
+            mv downloads/vuetorrent_tmp/* OpenList-Magisk/web/vuetorrent/
+          fi
+          
+          # 设置权限
+          echo "设置执行权限..."
+          chmod 755 OpenList-Magisk/openlist-*
+          chmod 755 OpenList-Magisk/bin/*
+          
+          # 清理临时文件
+          rm -rf downloads
+          
+          # 显示结果
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "模块文件结构:"
+          find OpenList-Magisk -type f | head -50
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "::endgroup::"
+
+      # ================================================================
+      # 第四阶段：更新配置与发布
+      # ================================================================
+      
+      - name: 更新 module.prop
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::更新 module.prop"
+          
+          if [ -f OpenList-Magisk/module.prop ]; then
+            # 更新版本信息
+            sed -i "s/^version=.*/version=${{ env.OPENLIST_VERSION }} (All-in-One)/" OpenList-Magisk/module.prop
+            sed -i "s/^versionCode=.*/versionCode=${{ env.OPENLIST_VERSION_CODE }}/" OpenList-Magisk/module.prop
+            
+            echo "更新后的 module.prop:"
+            cat OpenList-Magisk/module.prop
+          else
+            echo "::error::module.prop 文件不存在"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: 更新 update.json
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::更新 update.json"
+          
+          # 生成更新日志摘要
+          CHANGELOG_SUMMARY="OpenList ${{ env.OPENLIST_VERSION }}"
+          [ "${{ env.ARIA2_VERSION }}" != "${{ env.CURRENT_ARIA2 }}" ] && CHANGELOG_SUMMARY="$CHANGELOG_SUMMARY | Aria2 ${{ env.ARIA2_VERSION }}"
+          [ "${{ env.QBIT_VERSION }}" != "${{ env.CURRENT_QBIT }}" ] && CHANGELOG_SUMMARY="$CHANGELOG_SUMMARY | QB ${{ env.QBIT_VERSION }}"
+          [ "${{ env.FRPC_VERSION }}" != "${{ env.CURRENT_FRPC }}" ] && CHANGELOG_SUMMARY="$CHANGELOG_SUMMARY | Frpc ${{ env.FRPC_VERSION }}"
+          
+          cat > update.json << EOF
+          {
+            "version": "${{ env.OPENLIST_VERSION }}",
+            "versionCode": ${{ env.OPENLIST_VERSION_CODE }},
+            "zipUrl": "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ env.OPENLIST_VERSION }}/openlist-magisk-${{ env.OPENLIST_VERSION }}.zip",
+            "changelog": "${{ github.server_url }}/${{ github.repository }}/raw/main/CHANGELOG.md",
+            "aria2_version": "${{ env.ARIA2_VERSION }}",
+            "qbit_version": "${{ env.QBIT_VERSION }}",
+            "frpc_version": "${{ env.FRPC_VERSION }}",
+            "rclone_version": "${{ env.RCLONE_VERSION }}",
+            "ariang_version": "${{ env.ARIANG_VERSION }}",
+            "vuetorrent_version": "${{ env.VUETORRENT_VERSION }}",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "build_reason": "${{ env.BUILD_REASON }}"
+          }
+          EOF
+          
+          echo "生成的 update.json:"
+          cat update.json
+          echo "::endgroup::"
+
+      - name: 打包模块
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::打包 Magisk 模块"
+          
+          cd OpenList-Magisk
+          
+          # 创建 zip 包
+          zip -r ../openlist-magisk-${{ env.OPENLIST_VERSION }}.zip . \
+            -x "*.git*" \
+            -x "*.md" \
+            -x "*.txt"
+          
+          cd ..
+          
+          # 显示包信息
+          echo "打包完成:"
+          ls -lh openlist-magisk-${{ env.OPENLIST_VERSION }}.zip
+          echo "::endgroup::"
+
+      - name: 提交配置更新
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          echo "::group::提交更新到仓库"
+          
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          
+          git add update.json OpenList-Magisk/module.prop
+          
+          COMMIT_MSG="🚀 Auto update: ${{ env.BUILD_REASON }}"
+          git commit -m "$COMMIT_MSG" || echo "无更改需要提交"
+          git push origin main
+          
+          echo "::endgroup::"
+
+      - name: 生成 Release Notes
+        if: env.SHOULD_BUILD == 'true'
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## 📦 OpenList All-in-One Magisk Module
+          
+          **支持框架**: Magisk / KernelSU / APatch
+          
+          ### 📋 组件版本
+          | 组件 | 版本 |
+          |------|------|
+          | OpenList | ${{ env.OPENLIST_VERSION }} |
+          | Aria2 | ${{ env.ARIA2_VERSION }} |
+          | Qbittorrent | ${{ env.QBIT_VERSION }} |
+          | Frpc | ${{ env.FRPC_VERSION }} |
+          | Rclone | ${{ env.RCLONE_VERSION }} |
+          | AriaNg | ${{ env.ARIANG_VERSION }} |
+          | VueTorrent | ${{ env.VUETORRENT_VERSION }} |
+          
+          ### 🔄 本次更新
+          ${{ env.BUILD_REASON }}
+          
+          ### 📖 使用说明
+          1. 下载 zip 文件
+          2. 在 Magisk/KernelSU/APatch 中安装模块
+          3. 按提示选择安装路径
+          4. 重启设备
+          
+          ### 🔗 默认端口
+          - OpenList: `5244`
+          - Aria2 RPC: `6800` (密钥: `openlist`)
+          - Qbittorrent: `8080` (admin/adminadmin)
+          
+          ---
+          > 自动构建于 $(date -u +%Y-%m-%d\ %H:%M:%S) UTC
+          EOF
+
+      - name: 检查是否存在相同 Tag
+        if: env.SHOULD_BUILD == 'true'
+        id: check_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ env.OPENLIST_VERSION }}" > /dev/null 2>&1; then
+            echo "TAG_EXISTS=true" >> $GITHUB_ENV
+            echo "⚠️ Release ${{ env.OPENLIST_VERSION }} 已存在，将更新资产"
+          else
+            echo "TAG_EXISTS=false" >> $GITHUB_ENV
+            echo "✅ 将创建新 Release: ${{ env.OPENLIST_VERSION }}"
+          fi
+
+      - name: 更新已存在的 Release
+        if: env.SHOULD_BUILD == 'true' && env.TAG_EXISTS == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "删除旧资产..."
+          gh release delete-asset "${{ env.OPENLIST_VERSION }}" \
+            "openlist-magisk-${{ env.OPENLIST_VERSION }}.zip" --yes || true
+          
+          echo "上传新资产..."
+          gh release upload "${{ env.OPENLIST_VERSION }}" \
+            "openlist-magisk-${{ env.OPENLIST_VERSION }}.zip" --clobber
+          
+          echo "更新 Release Notes..."
+          gh release edit "${{ env.OPENLIST_VERSION }}" \
+            --notes-file release_notes.md
+
+      - name: 创建新 Release
+        if: env.SHOULD_BUILD == 'true' && env.TAG_EXISTS == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ env.OPENLIST_VERSION }}" \
+            --title "OpenList ${{ env.OPENLIST_VERSION }} (All-in-One)" \
+            --notes-file release_notes.md \
+            --draft=false \
+            --prerelease=false \
+            "openlist-magisk-${{ env.OPENLIST_VERSION }}.zip"
+
+      # ================================================================
+      # 清理阶段
+      # ================================================================
+      
+      - name: 清理临时文件
+        if: always()
+        run: |
+          rm -rf openlist-magisk-*.zip release_notes.md downloads/
+
+      - name: 构建摘要
+        if: always()
+        run: |
+          echo "## 🏗️ 构建摘要" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ env.SHOULD_BUILD }}" = "true" ]; then
+            echo "✅ **构建成功**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**构建原因**: ${{ env.BUILD_REASON }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 组件版本" >> $GITHUB_STEP_SUMMARY
+            echo "| 组件 | 版本 |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+            echo "| OpenList | ${{ env.OPENLIST_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Aria2 | ${{ env.ARIA2_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Qbittorrent | ${{ env.QBIT_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Frpc | ${{ env.FRPC_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Rclone | ${{ env.RCLONE_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⏭️ **跳过构建**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "所有组件均为最新版本，无需更新。" >> $GITHUB_STEP_SUMMARY
+          fi
