@@ -84,7 +84,7 @@ jobs:
             "https://api.github.com/repos/P3TERX/Aria2-Pro-Core/releases/latest")
           
           ARIA2_VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
-          ARIA2_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | contains("linux_arm64.tar.gz")) | .browser_download_url')
+          ARIA2_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith("linux-arm64.tar.gz")) | .browser_download_url')
           
           echo "Aria2 版本: $ARIA2_VERSION"
           echo "ARIA2_VERSION=$ARIA2_VERSION" >> $GITHUB_ENV
